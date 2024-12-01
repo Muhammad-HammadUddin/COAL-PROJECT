@@ -1,0 +1,390 @@
+INCLUDE Irvine32.inc
+
+.data
+    ; Menu prompts
+    menuPrompt   BYTE "Choose an option:", 0dh, 0ah
+                 BYTE "1. Validate Password", 0dh, 0ah
+                 BYTE "2. Generate Strong Password", 0dh, 0ah
+                 BYTE "3. View Stored Passwords", 0dh, 0ah
+                 BYTE "4. Exit Program", 0dh, 0ah
+                 BYTE "Enter choice (1-4): ", 0
+   
+    invalidChoice BYTE "Invalid choice! Please enter 1-4.", 0dh, 0ah, 0
+    valPrompt    BYTE "Enter password (8-20 chars): ", 0
+    success      BYTE "Password is valid!", 0dh, 0ah, 0
+    error        BYTE "Password is invalid! Must have:", 0dh, 0ah
+                 BYTE "- 8-20 characters", 0dh, 0ah
+                 BYTE "- At least one uppercase letter", 0dh, 0ah
+                 BYTE "- At least one lowercase letter", 0dh, 0ah
+                 BYTE "- At least one number", 0dh, 0ah, 0
+   
+    genMsg       BYTE "Generated password: ", 0
+    storedMsg    BYTE "Stored Passwords:", 0dh, 0ah, 0
+    noPassMsg    BYTE "No passwords stored yet.", 0dh, 0ah, 0
+    saveMsg      BYTE "Password saved successfully!", 0dh, 0ah, 0
+    errorMsg     BYTE "Error accessing file!", 0dh, 0ah, 0
+
+    filename     BYTE "passwords.txt", 0
+    fileHandle   HANDLE ?
+    buffer       BYTE 1000 DUP(?)
+    bytesRead    DWORD ?
+   
+    password     BYTE 21 DUP(0)    ; Buffer for password
+    inputLen     DWORD ?           ;
+    newline      BYTE 0dh, 0ah     ;
+   
+    uppers      BYTE "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    lowers      BYTE "abcdefghijklmnopqrstuvwxyz"
+    numbers     BYTE "0123456789"
+    specials    BYTE "!@#$%^&*"
+   
+    ; Creation mode for CreateFile
+    CREATE_ALWAYS    = 2
+    GENERIC_WRITE    = 40000000h
+    GENERIC_READ     = 80000000h
+    FILE_SHARE_READ  = 1
+    OPEN_EXISTING    = 3
+
+    ; Colors
+    green       = 2    ;
+    red         = 4    ;
+    yellow      = 14   ;
+    white       = 15   ;
+
+.code
+main PROC
+menu_loop:
+   
+    call Clrscr
+   
+    mov eax, yellow
+    call SetTextColor
+   
+    ;for menu
+    mov edx, OFFSET menuPrompt
+    call WriteString
+   
+    mov eax, white
+    call SetTextColor
+    call ReadDec      
+   
+    cmp eax, 1
+    je validate_password
+    cmp eax, 2
+    je generate_password
+    cmp eax, 3
+    je view_passwords
+    cmp eax, 4
+    je exit_program
+   
+    ; Invalid choice handling
+    mov eax, red
+    call SetTextColor
+    mov edx, OFFSET invalidChoice
+    call WriteString
+    mov eax, white
+    call SetTextColor
+    call WaitMsg
+    jmp menu_loop
+   
+validate_password:
+validation_loop:
+    mov eax, yellow
+    call SetTextColor
+    mov edx, OFFSET valPrompt
+    call WriteString
+ 
+    mov eax, white
+    call SetTextColor
+   
+    ; Clearing password buffer
+    mov ecx, SIZEOF password
+    mov edi, OFFSET password
+    mov al, 0
+    rep stosb
+   
+    mov edx, OFFSET password
+    mov ecx, SIZEOF password
+    call ReadString
+    mov inputLen, eax
+   
+    call validate_pwd
+   
+    ; Check if validation failed (result in EAX)
+    cmp eax, 0
+    je validation_loop  ;
+   
+    ; If valid, save password to file
+    call save_password
+    call WaitMsg
+    jmp menu_loop
+   
+generate_password:
+    call generate_pwd
+    call save_password
+    call WaitMsg
+    jmp menu_loop
+
+view_passwords:
+    call read_passwords
+    call WaitMsg
+    jmp menu_loop
+
+exit_program:
+    mov eax, white
+    call SetTextColor
+    call Clrscr
+    exit
+
+main ENDP
+
+save_password PROC
+    ; Open file for append
+    INVOKE CreateFile,
+        ADDR filename,
+        GENERIC_WRITE,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        0
+   
+    ; If file doesn't exist, create it
+    cmp eax, INVALID_HANDLE_VALUE
+    jne file_exists
+   
+    INVOKE CreateFile,
+        ADDR filename,
+        GENERIC_WRITE,
+        FILE_SHARE_READ,
+        NULL,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        0
+   
+file_exists:
+    mov fileHandle, eax
+   
+    ; Move file pointer to end
+    INVOKE SetFilePointer,
+        fileHandle,
+        0,
+        0,
+        FILE_END
+   
+    ; Write password
+    mov edx, OFFSET password
+    call StrLength
+    mov ecx, eax
+    INVOKE WriteFile,
+        fileHandle,
+        ADDR password,
+        ecx,
+        ADDR bytesRead,
+        0
+   
+    ; Write newline
+    INVOKE WriteFile,
+        fileHandle,
+        ADDR newline,
+        2,
+        ADDR bytesRead,
+        0
+   
+    ; Close file
+    INVOKE CloseHandle, fileHandle
+   
+    mov eax, green
+    call SetTextColor
+    mov edx, OFFSET saveMsg
+    call WriteString
+    ret
+save_password ENDP
+
+read_passwords PROC
+    ; Open file for reading
+    INVOKE CreateFile,
+        ADDR filename,
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        NULL,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        0
+   
+    ; Check if file exists
+    cmp eax, INVALID_HANDLE_VALUE
+    je no_passwords
+   
+    mov fileHandle, eax
+   
+    ; Read file content
+    INVOKE ReadFile,
+        fileHandle,
+        ADDR buffer,
+        SIZEOF buffer,
+        ADDR bytesRead,
+        0
+   
+    ; Close file
+    INVOKE CloseHandle, fileHandle
+   
+    mov eax, green
+    call SetTextColor
+    mov edx, OFFSET storedMsg
+    call WriteString
+   
+    ; Null terminate buffer
+    mov esi, OFFSET buffer
+    add esi, bytesRead
+    mov BYTE PTR [esi], 0
+   
+    mov edx, OFFSET buffer
+    mov eax, white
+    call SetTextColor
+    call WriteString
+    ret
+   
+no_passwords:
+    mov eax, yellow
+    call SetTextColor
+    mov edx, OFFSET noPassMsg
+    call WriteString
+    ret
+read_passwords ENDP
+
+validate_pwd PROC
+    ; Initialize validation flags
+    xor ebx, ebx        ;
+    xor ecx, ecx        ; Flags: bit 0=uppercase, bit 1=lowercase, bit 2=number
+   
+    cmp inputLen, 8
+    jl invalid_pwd
+    cmp inputLen, 20
+    ja invalid_pwd
+   
+validate_loop:
+    mov al, [password + ebx]
+    cmp al, 0
+    je check_results
+   
+    ; Check character type
+    cmp al, 'A'
+    jb check_num
+    cmp al, 'Z'
+    jbe is_upper
+    cmp al, 'a'
+    jb next_char
+    cmp al, 'z'
+    jbe is_lower
+    jmp next_char
+   
+check_num:
+    cmp al, '0'
+    jb next_char
+    cmp al, '9'
+    ja next_char
+    or ecx, 4
+    jmp next_char
+   
+is_upper:
+    or ecx, 1
+    jmp next_char
+   
+is_lower:
+    or ecx, 2
+   
+next_char:
+    inc ebx
+    cmp ebx, inputLen
+    jb validate_loop
+   
+check_results:
+    cmp ecx, 7
+    jne invalid_pwd
+   
+    mov eax, green
+    call SetTextColor
+    mov edx, OFFSET success
+    call WriteString
+    mov eax, 1        ; Return 1 for valid password
+    ret
+   
+invalid_pwd:
+    mov eax, red
+    call SetTextColor
+    mov edx, OFFSET error
+    call WriteString
+    mov eax, 0        ; Return 0 for invalid password
+    ret
+validate_pwd ENDP
+
+generate_pwd PROC
+    mov ecx, 12         ;
+    mov esi, 0         ; Password buffer index
+   
+    ; Clear password buffer
+    push ecx
+    mov ecx, SIZEOF password
+    mov edi, OFFSET password
+    mov al, 0
+    rep stosb
+    pop ecx
+   
+gen_loop:
+    push ecx           ; Save loop counter
+   
+    ; Generate random number 0-3 to choose character type
+    mov eax, 4
+    call RandomRange
+   
+    cmp eax, 0
+    je gen_upper
+    cmp eax, 1
+    je gen_lower
+    cmp eax, 2
+    je gen_number
+    jmp gen_special
+   
+gen_upper:
+    mov eax, 26        
+    call RandomRange
+    mov bl, uppers[eax]
+    jmp store_char
+   
+gen_lower:
+    mov eax, 26        
+    call RandomRange
+    mov bl, lowers[eax]
+    jmp store_char
+   
+gen_number:
+    mov eax, 10      
+    call RandomRange
+    mov bl, numbers[eax]
+    jmp store_char
+   
+gen_special:
+    mov eax, 8        
+    call RandomRange
+    mov bl, specials[eax]
+   
+store_char:
+    mov password[esi], bl
+    inc esi
+   
+    pop ecx            ; Restore loop counter
+    loop gen_loop
+   
+    ; Display generated password in green
+    mov eax, green
+    call SetTextColor
+    mov edx, OFFSET genMsg
+    call WriteString
+    mov edx, OFFSET password
+    call WriteString
+    call Crlf
+    ret
+generate_pwd ENDP
+
+END main
